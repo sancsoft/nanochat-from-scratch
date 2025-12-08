@@ -697,7 +697,6 @@ Layer Normalization centers activations around zero before most linear projectio
 ## no learnable params in rmsnorm
 ## Group-Query Attention (GQA) support for more efficient inference
 
-
 Next steps:
 
 1. **Split the codebase** into model, inference, and tokenizer modules. I'm training my own tokenizer, so HF's is going out the window.
