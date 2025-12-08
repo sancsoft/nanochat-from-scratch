@@ -619,8 +619,6 @@ Qwen (and Llama) uses **SwiGLU**. It uses **three** matrices instead of two. It 
 
 Karpathy uses squared ReLU. It uses two linear layers. One Up-Projection and one Down-Projection. The activation happens after the Up-Projection
 
-### 1. Karpathy's Way (ReLU²)
-
 $$ z = x \cdot W_{fc}^T $$
 $$ h = \max(0, z)^2 $$
 $$ \text{out} = h \cdot W_{proj}^T $$
@@ -686,7 +684,7 @@ $$ y = xW $$
 It's just one flag.
 
 ```python
-# The 'bias=False' flag saves us from performing useless additions
+# The 'bias=False'
 self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
 ```
 
