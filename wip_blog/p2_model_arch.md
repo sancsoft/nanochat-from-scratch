@@ -688,13 +688,102 @@ It's just one flag.
 self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
 ```
 
-Upon first glance, it seems pretty clear cut. BUT THATS WHERE YOU"RE WRONG. While its super simple to implement and 
+Upon first glance, it seems pretty clear cut. BUT THATS WHERE YOU"RE WRONG. While its super simple to implement, theres actually a reason why bias is off for linear layers. Specifically when combined with layer normalization. There's a weird roundabout explaination for this that is pretty subtle and I haven't seen any expaination for this online 
 
-Biases are redundant when combined with layernorm that have 
-Layer Normalization centers activations around zero before most linear projections. That makes per-neuron bias terms mostly pointless. Any constant shift they would provide gets erased by normalization. So architects drop them. This reduces parameters and speeds up training. Accuracy stays unchanged.
+So to dig into this, we need to look at the transformer block. Specifically the sequence of layers. It goes Norm->Attention->Norm->Linear and that repeats for every block, along with a final Norm at the end. 
+
+The takeaway you should make is that the Norm happens in between pretty much every layer. Lets look at the Linear layer and the Norm together with *MATH*.
+
+We know a linear layers equasions are
+$$ y = xW + b $$
+
+Where
+*   $x$: Input vector of size $D$.
+*   $W$: Weight matrix of size $D \times D$.
+*   $b$: Bias vector of size $D$.
+*   $y$: Output of the Linear layer ($y = Wx + b$).
+*   $\mathbf{1}$: A vector of all ones of size $D$ (used for broadcasting scalars).
+
+The layer normalization equasion is 
+$$z = \frac{y - \mu}{\sigma} \odot \gamma + \beta$$
+
+Where
+*   $\gamma$: Learnable scale vector.
+*   $\beta_{LN}$: Learnable shift vector (I will use $\beta_{LN}$ to differentiate it from the linear bias).
+*   $\sigma$: variance equasion below
+*   $\mu$: mean equasion below
+
+We know that that the linear layer feeds into the layer norm so we can use the output (y) from the linear layer to feed into the layer norm. We also know from the layer norm equasion that we have to calculate the mean and the variance using the output of the previous layer. This is where it gets pretty heavy, so bear with me.
+
+layerNorm first calculates the scalar mean of the vector $y$.
+
+$$ \mu = \frac{1}{D} \sum_{i=1}^{D} y_i $$
+
+Substitute the definition of $y_i = (Wx)_i + b_i$:
+
+$$ \mu = \frac{1}{D} \sum_{i=1}^{D} \left( (Wx)_i + b_i \right) $$
+
+We can split this into the mean of the matrix multiplication and the mean of the bias.
+
+$$ \mu = \underbrace{\left( \frac{1}{D} \sum_{i=1}^{D} (Wx)_i \right)}_{\text{Let's call this } \mu_{Wx}} + \underbrace{\left( \frac{1}{D} \sum_{i=1}^{D} b_i \right)}_{\text{Let's call this } \bar{b}} $$
+
+So, the mean of the total output is simply the sum of the partial means:
+$$ \mu = \mu_{Wx} + \bar{b} $$
+
+### 3. The Cancellation
+
+LayerNorm subtracts the mean from the input vector. This is the numerator of the normalization equation.
+
+$$ \text{Centered Output} = y - \mu\mathbf{1} $$
+
+Substitute $y = Wx + b$ and $\mu = \mu_{Wx} + \bar{b}$:
+
+$$ y - \mu = (Wx + b) - (\mu_{Wx} + \bar{b}) $$
+
+Group the "weight" terms and the "bias" terms together:
+
+$$ y - \mu = (Wx - \mu_{Wx}) + (b - \bar{b}) $$
+
+Now remember the layer normalization equasion is
+
+$$z = \frac{y - \mu}{\sigma} \odot \gamma + \beta$$
+
+So, in the mean step, the bias is virtually cancelled out by its average $$\bar{b}$$
+
+If you are following well, you may understand that this isn't *exactly* a cancellation. It's only a cancellation if all of the bias' are exactly the same, if they are jagged, then the bias still exists. While this is correct, you must keep in mind that we are trying to maximize the amount of performace/flop. If there a large amount of parameters that do not have a large amount of expressivity, and don't change the performace much, we generally cut them out. This is especially for small scale experiments like this.
+
+As an exercise, if you'd like, you can do this for the variation step and find something similar. 
+
+The final nail in the coffin for the linear layer's bias term is that layer norms have their own learnable bias term that isn't cancelled out in the very next layer! 
+
+TL;DR a large portion of the linear layer's bias gets cancelled out when you do the subsistution. 
+
+## no learnable params in rmsnorm
+
+Now its time to make all of the math in the previous section pointless! So You'll remember that we did all of the math for Layer Norm... RMS norm is completely different, so what gives? 
+
+To dig into this, lets look at the math for RMS norm
+
+
+$$ y = \frac{x}{\sqrt{\frac{1}{N} \sum_{i=1}^N x_i^2 + \epsilon}} \odot \gamma $$
+
+Note because theres no learnable parameters its just.
+
+$$ y = \frac{x}{\sqrt{\frac{1}{N} \sum_{i=1}^N x_i^2 + \epsilon}} $$
+
+where the epsilon is  ```torch.finfo(x.dtype).eps```. Which is just a really small number for numerical stability (divide by zero errors).
+
+*   For `float32`: $\epsilon \approx 1.192 \times 10^{-7}$
+*   For `float16`: $\epsilon \approx 9.77 \times 10^{-4}$
+*   For `bfloat16`: $\epsilon \approx 7.8 \times 10^{-3}$
+
+```
+def norm(x):
+    # Purely functional rmsnorm with no learnable params
+    return F.rms_norm(x, (x.size(-1),))
+```
 
 ## norm after token embedding
-## no learnable params in rmsnorm
 ## Group-Query Attention (GQA) support for more efficient inference
 
 Next steps:
